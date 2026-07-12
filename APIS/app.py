@@ -791,7 +791,12 @@ def render_sidebar(cos: COSClient):
         st.divider()
 
         if not st.session_state["authenticated"]:
-            _render_auth_panel(cos)
+            # FIX: previously called _render_auth_panel(cos) here, which drew a
+            # second full login/register form in the sidebar — duplicating the
+            # one already rendered by page_login_landing() in the main area.
+            # The informational panel below points users to that main-area form
+            # instead of re-implementing login in two places.
+            _render_public_nav_panel()
         else:
             _render_nav_panel()
 
@@ -823,7 +828,12 @@ def _render_public_nav_panel():
 
 
 def _render_auth_panel(cos: COSClient):
-    """Login / Register / Forgot Password tabs."""
+    """Login / Register / Forgot Password tabs.
+
+    NOTE: no longer called from render_sidebar() — kept here in case a
+    sidebar-based login is wanted again in the future. The live login flow
+    lives in page_login_landing().
+    """
     if st.session_state.get("show_forgot_pw"):
         _render_forgot_password(cos)
         return
@@ -1898,6 +1908,7 @@ def page_login_landing(cos):
             )
 
 
+# ═════════════════════════════════════════════════════════════════════════════
 # SETUP GUIDE (missing credentials)
 # ═════════════════════════════════════════════════════════════════════════════
 
