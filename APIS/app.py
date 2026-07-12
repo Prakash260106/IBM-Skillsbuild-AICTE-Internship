@@ -13,6 +13,7 @@ Navigation (authenticated):
 import os
 import logging
 import streamlit as st
+from PIL import Image
 
 # ── local utils ───────────────────────────────────────────────────────────────
 from utils.cos_client      import COSClient
@@ -78,9 +79,37 @@ html, body, [data-testid="stApp"] {
   scroll-behavior: smooth;
 }
 
-/* Hide Streamlit branding */
-#MainMenu, footer, header { visibility: hidden; }
-[data-testid="stDecoration"] { display: none; }
+/* Hide Streamlit's default chrome entirely — display:none (not
+   visibility:hidden) so the elements are removed from layout/paint
+   immediately, rather than just being invisible-but-present, which is
+   what was causing the header/sidebar-arrow flash on load. */
+#MainMenu,
+footer,
+header,
+[data-testid="stHeader"],
+[data-testid="stToolbar"],
+[data-testid="stStatusWidget"],
+[data-testid="stDecoration"] {
+  display: none !important;
+  visibility: hidden !important;
+  height: 0 !important;
+}
+
+/* Sidebar is permanently unused — top nav / login card handle all
+   navigation. Hidden here, in the very first CSS injected after
+   set_page_config(), so there is no flash-of-sidebar before this
+   rule applies. */
+[data-testid="stSidebar"],
+[data-testid="collapsedControl"] {
+  display: none !important;
+  visibility: hidden !important;
+}
+
+/* Reclaim the top padding Streamlit normally reserves for its header,
+   now that the header itself is gone. */
+[data-testid="stAppViewContainer"] > .main {
+  padding-top: 0 !important;
+}
 
 /* ── Sidebar ──────────────────────────────────────────────────────────────── */
 [data-testid="stSidebar"] {
@@ -696,14 +725,81 @@ div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] > div .stButt
 """
 
 import base64
+import io
 
-try:
-    with open("assets/logo.png", "rb") as f:
-        _b64 = base64.b64encode(f.read()).decode()
-        LOGO_SVG = f'<img src="data:image/png;base64,{_b64}" alt="IntegriAI logo">'
-        LOGIN_LOGO = f'<img src="data:image/png;base64,{_b64}" alt="IntegriAI logo">'
-        TOPNAV_LOGO = f'<img src="data:image/png;base64,{_b64}" alt="IntegriAI logo">'
-except Exception:
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ASSETS_DIR = os.path.join(BASE_DIR, "assets")
+LOGO_PATH = os.path.join(ASSETS_DIR, "logo.png")
+DASHBOARD_HERO_PATH = os.path.join(ASSETS_DIR, "dashboard_hero.png")
+
+
+def _load_image_safe(path: str, label: str):
+    """Load an image into memory as a PIL.Image, with detailed diagnostics
+    on failure (rather than a bare emoji fallback with no explanation).
+
+    Returns (PIL.Image | None, diagnostic_message | None).
+    """
+    if os.path.exists(path):
+        try:
+            img = Image.open(path)
+            img.load()  # force-read pixel data now so any error surfaces here
+            return img, None
+        except Exception as e:
+            msg = f"{label}: file exists at `{path}` but could not be opened as an image ({e})."
+            logger.warning(msg)
+            return None, msg
+
+    # File wasn't found at the expected path — look for likely causes.
+    if not os.path.isdir(ASSETS_DIR):
+        msg = (
+            f"{label}: the `assets/` folder itself is missing "
+            f"(expected at `{ASSETS_DIR}`). It may not have been committed/deployed."
+        )
+        logger.warning(msg)
+        return None, msg
+
+    # assets/ exists but the exact filename doesn't — check for a
+    # case-mismatch or near-match, which is a common cross-platform bug
+    # (works on Windows/Mac, breaks on case-sensitive Linux deployments).
+    wanted = os.path.basename(path).lower()
+    try:
+        siblings = os.listdir(ASSETS_DIR)
+    except Exception:
+        siblings = []
+    close_match = next((f for f in siblings if f.lower() == wanted), None)
+
+    if close_match:
+        msg = (
+            f"{label}: found `{close_match}` in `assets/` but the code looks for "
+            f"`{os.path.basename(path)}` — filename casing doesn't match "
+            f"(this passes on Windows/Mac, fails on case-sensitive Linux deployments)."
+        )
+    else:
+        msg = (
+            f"{label}: `{os.path.basename(path)}` not found in `assets/`. "
+            f"Files present: {siblings or '(folder is empty)'}"
+        )
+    logger.warning(msg)
+    return None, msg
+
+
+LOGO_IMAGE, LOGO_LOAD_ERROR = _load_image_safe(LOGO_PATH, "Logo")
+DASHBOARD_HERO_IMAGE, DASHBOARD_HERO_LOAD_ERROR = _load_image_safe(
+    DASHBOARD_HERO_PATH, "Dashboard hero image"
+)
+
+# The sidebar logo / login logo / topnav logo are embedded inline as base64
+# <img> tags (not st.image), so they still need raw bytes — read those from
+# the already-validated PIL image via an in-memory buffer rather than
+# re-opening the file path a second time.
+if LOGO_IMAGE is not None:
+    _buf = io.BytesIO()
+    LOGO_IMAGE.save(_buf, format="PNG")
+    _b64 = base64.b64encode(_buf.getvalue()).decode()
+    LOGO_SVG = f'<img src="data:image/png;base64,{_b64}" alt="IntegriAI logo">'
+    LOGIN_LOGO = f'<img src="data:image/png;base64,{_b64}" alt="IntegriAI logo">'
+    TOPNAV_LOGO = f'<img src="data:image/png;base64,{_b64}" alt="IntegriAI logo">'
+else:
     LOGO_SVG = "🛡️"
     LOGIN_LOGO = "🛡️"
     TOPNAV_LOGO = "🛡️"
@@ -1020,10 +1116,10 @@ def page_dashboard(cos: COSClient):
         )
     
     with col_img:
-        try:
-            st.image("assets/dashboard_hero.png", use_container_width=True)
-        except Exception as e:
-            logger.error(f"Failed to load dashboard hero image: {e}")
+        if DASHBOARD_HERO_IMAGE is not None:
+            st.image(DASHBOARD_HERO_IMAGE, use_container_width=True)
+        elif DASHBOARD_HERO_LOAD_ERROR:
+            st.info(f"🖼️ Hero image not loaded — {DASHBOARD_HERO_LOAD_ERROR}")
 
     st.markdown("<hr>", unsafe_allow_html=True)
 
@@ -1722,6 +1818,11 @@ def _render_topnav():
 # ═════════════════════════════════════════════════════════════════════════════
 
 def page_login_landing(cos):
+    # ── Asset diagnostics (visible, not just in server logs) ───────────────
+    if LOGO_LOAD_ERROR:
+        with st.expander("⚠️ Logo image failed to load — click for details", expanded=False):
+            st.warning(LOGO_LOAD_ERROR)
+
     # ── Centred auth card (top) ───────────────────────────────────────────────
     _, center_col, _ = st.columns([1, 2, 1])
     with center_col:
@@ -1948,9 +2049,9 @@ export COS_INSTANCE_CRN="..."
 def main():
     st.set_page_config(
         page_title="IntegriAI — Academic Integrity",
-        page_icon="assets/logo.png",
+        page_icon=LOGO_IMAGE if LOGO_IMAGE is not None else "🛡️",
         layout="wide",
-        initial_sidebar_state="expanded",
+        initial_sidebar_state="collapsed",
     )
 
     # Inject global CSS
@@ -1978,31 +2079,13 @@ def main():
 
     if not st.session_state["authenticated"]:
         # No sidebar on the pre-login screen — page_login_landing() is the
-        # single, full-width login/register surface.
-        st.markdown(
-            """
-            <style>
-            [data-testid="stSidebar"] { display: none !important; }
-            [data-testid="collapsedControl"] { display: none !important; }
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
+        # single, full-width login/register surface. (Sidebar is already
+        # hidden globally via CUSTOM_CSS above.)
         page_login_landing(cos)
         return
 
     # ── Authenticated: no sidebar — top nav is the only navigation ─────────
-    st.markdown(
-        """
-        <style>
-        [data-testid="stSidebar"] { display: none !important; }
-        [data-testid="collapsedControl"] { display: none !important; }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # ── Top navigation bar (always visible regardless of sidebar state) ────
+    # (Sidebar is already hidden globally via CUSTOM_CSS above.)
     _render_topnav()
 
     page = st.session_state["active_page"]
