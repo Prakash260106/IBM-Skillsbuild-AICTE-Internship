@@ -1977,7 +1977,17 @@ def main():
         st.stop()
 
     if not st.session_state["authenticated"]:
-        render_sidebar(cos)
+        # No sidebar on the pre-login screen — page_login_landing() is the
+        # single, full-width login/register surface.
+        st.markdown(
+            """
+            <style>
+            [data-testid="stSidebar"] { display: none !important; }
+            [data-testid="collapsedControl"] { display: none !important; }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
         page_login_landing(cos)
         return
 
